@@ -1,0 +1,175 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html>
+<head>
+    <title>Neon Sprint: Hall of Fame</title>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background: #000; overflow: hidden; font-family: 'Courier New', monospace; color: white; }
+        #game-container { position: relative; }
+        canvas { border: 2px solid #333; background: #000; }
+        #ui { position: absolute; top: 15px; left: 15px; pointer-events: none; text-shadow: 0 0 5px #fff; z-index: 10; }
+        
+        /* Achievement Pop-up */
+        #toast { 
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 255, 255, 0.9); color: #000; padding: 10px 20px;
+            border-radius: 5px; font-weight: bold; display: none; z-index: 100;
+            box-shadow: 0 0 20px #0ff;
+        }
+
+        #shop-overlay { 
+            position: absolute; top: 0; left: 0; width: 800px; height: 400px; 
+            background: rgba(0,0,0,0.95); display: none; flex-direction: column; 
+            justify-content: center; align-items: center; z-index: 20;
+        }
+        .item-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 85%; max-height: 250px; overflow-y: auto; }
+        .shop-item { background: #111; border: 1px solid #444; padding: 8px; font-size: 12px; }
+        .unlocked { color: #0f0; border-color: #0f0; }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="ui">
+            NANITES: <span id="nanitesCount">0</span> | SCORE: <span id="score">0</span>
+        </div>
+        
+        <div id="toast">ACHIEVEMENT UNLOCKED!</div>
+
+        <div id="shop-overlay">
+            <h2 style="color:#0ff">ACHIEVEMENTS & UPGRADES</h2>
+            <div id="content-list" class="item-grid"></div>
+            <p>Press 'S' to Close</p>
+        </div>
+        
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = 800; canvas.height = 400;
+
+// Data & Persistence
+let nanites = parseInt(localStorage.getItem('nanites')) || 0;
+let upgrades = JSON.parse(localStorage.getItem('upgrades')) || { tripleJump: false, startShield: false };
+let achievements = JSON.parse(localStorage.getItem('achievements')) || {
+    marathon: { name: "Marathoner", desc: "Reach 100 Score", goal: 100, done: false, reward: 500 },
+    bossSlayer: { name: "Drone Hunter", desc: "Kill your first Boss", goal: 1, done: false, reward: 200 },
+    rich: { name: "Capitalist", desc: "Hold 1000 Nanites", goal: 1000, done: false, reward: 300 }
+};
+
+// Game State
+let score = 0, bossesKilled = 0, isGameOver = false, frameCount = 0, isShopOpen = false;
+let obstacles = [], coins = [], bossActive = false, bossHealth = 0;
+const player = { x: 80, y: 300, w: 30, h: 30, dy: 0, jumpCount: 0, shielded: false };
+
+function checkAchievements() {
+    if (!achievements.marathon.done && score >= achievements.marathon.goal) unlock('marathon');
+    if (!achievements.bossSlayer.done && bossesKilled >= achievements.bossSlayer.goal) unlock('bossSlayer');
+    if (!achievements.rich.done && nanites >= achievements.rich.goal) unlock('rich');
+}
+
+function unlock(key) {
+    achievements[key].done = true;
+    nanites += achievements[key].reward;
+    showToast(`UNLOCKED: ${achievements[key].name} (+${achievements[key].reward}N)`);
+    save();
+}
+
+function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.innerText = msg;
+    t.style.display = 'block';
+    setTimeout(() => { t.style.display = 'none'; }, 3000);
+}
+
+function save() {
+    localStorage.setItem('nanites', nanites);
+    localStorage.setItem('achievements', JSON.stringify(achievements));
+}
+
+window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+        if (isGameOver && !isShopOpen) restart();
+        else if (!isGameOver && player.jumpCount < (upgrades.tripleJump ? 3 : 2)) {
+            player.dy = -11; player.jumpCount++;
+        }
+    }
+    if (e.code === 'KeyS' && (isGameOver || frameCount === 0)) toggleShop();
+});
+
+function toggleShop() {
+    isShopOpen = !isShopOpen;
+    document.getElementById('shop-overlay').style.display = isShopOpen ? 'flex' : 'none';
+    if (isShopOpen) renderMenu();
+}
+
+function renderMenu() {
+    const list = document.getElementById('content-list');
+    list.innerHTML = '';
+    Object.values(achievements).forEach(a => {
+        const div = document.createElement('div');
+        div.className = `shop-item ${a.done ? 'unlocked' : ''}`;
+        div.innerHTML = `<strong>${a.name}</strong><br>${a.desc}<br>${a.done ? 'COMPLETE' : 'LOCKED'}`;
+        list.appendChild(div);
+    });
+}
+
+function update() {
+    if (isGameOver || isShopOpen) return;
+    frameCount++;
+
+    player.dy += 0.6; player.y += player.dy;
+    if (player.y + player.h > canvas.height) { player.y = canvas.height - player.h; player.dy = 0; player.jumpCount = 0; }
+
+    if (score > 0 && score % 50 === 0 && !bossActive) { bossActive = true; bossHealth = 5; }
+    if (!bossActive && frameCount % 80 === 0) obstacles.push({ x: 800, y: 360, w: 20, h: 40, passed: false });
+    if (frameCount % 100 === 0) coins.push({ x: 800, y: 150 + Math.random()*150, w: 15, h: 15 });
+
+    coins.forEach((c, i) => {
+        c.x -= 6;
+        if (Math.hypot((player.x+15)-c.x, (player.y+15)-c.y) < 30) {
+            nanites += 5; coins.splice(i, 1);
+            if (bossActive) { 
+                bossHealth--; 
+                if (bossHealth <= 0) { bossActive = false; score += 20; bossesKilled++; } 
+            }
+            checkAchievements();
+        }
+    });
+
+    obstacles.forEach((o, i) => {
+        o.x -= 6;
+        if (player.x < o.x + o.w && player.x + 30 > o.x && player.y < o.y + o.h && player.y + 30 > o.y) {
+            if (player.shielded) { player.shielded = false; obstacles.splice(i, 1); }
+            else isGameOver = true;
+        }
+        if (o.x < player.x && !o.passed) { o.passed = true; score++; checkAchievements(); }
+    });
+    
+    document.getElementById('nanitesCount').innerText = nanites;
+    document.getElementById('score').innerText = score;
+}
+
+function draw() {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 800, 400);
+    ctx.shadowBlur = 10; ctx.shadowColor = '#0ff';
+    ctx.fillStyle = '#0ff'; ctx.fillRect(player.x, player.y, 30, 30);
+    ctx.fillStyle = '#f0f'; obstacles.forEach(o => ctx.fillRect(o.x, o.y, o.w, o.h));
+    ctx.fillStyle = '#ff0'; coins.forEach(c => ctx.fillRect(c.x, c.y, 15, 15));
+    if (bossActive) { ctx.fillStyle = '#f05'; ctx.fillRect(700, 150 + Math.sin(frameCount*0.05)*100, 50, 50); }
+    if (isGameOver) {
+        ctx.fillStyle = "white"; ctx.textAlign = "center";
+        ctx.fillText("SYSTEM CRASH | 'S' FOR LOGS", 400, 200);
+    }
+    requestAnimationFrame(draw);
+}
+
+function restart() {
+    score = 0; frameCount = 0; isGameOver = false;
+    obstacles = []; coins = []; bossActive = false;
+}
+
+setInterval(update, 1000/60); draw();
+</script>
+</body>
+</html>
